@@ -27,3 +27,28 @@ model Session {
   collaborator  Boolean?  @default(false)
   emailVerified Boolean?  @default(false)
 }
+
+enum SourceType {
+  UPLOAD
+  INSTAGRAM
+  TIKTOK
+  URL
+}
+
+enum UGCStatus {
+  DRAFT
+  APPROVED
+  REJECTED
+}
+
+model Media {
+  id         String     @id @default(cuid())
+  url        String
+  caption    String?
+  productId  String?
+  sourceType SourceType @default(UPLOAD)
+  status     UGCStatus  @default(DRAFT)
+  tags       String[]
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+}
