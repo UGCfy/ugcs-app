@@ -2,4 +2,9 @@
 import pkg from '@prisma/client';
 const { PrismaClient } = pkg;
 
-export const prisma = new PrismaClient();
+// Single Prisma client for the whole app
+const prisma = new PrismaClient();
+
+// Export both named and default to satisfy all imports
+export { PrismaClient, prisma };
+export default prisma;
