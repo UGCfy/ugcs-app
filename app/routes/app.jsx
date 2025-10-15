@@ -17,8 +17,11 @@ export default function App() {
     <AppProvider embedded apiKey={apiKey}>
       <s-app-nav>
         <s-link href="/app">Home</s-link>
-        <s-link href="/app/additional">Additional page</s-link>
-        <s-link href="/app/media">UGC Media</s-link>
+        <s-link href="/app/media">Media</s-link>
+        <s-link href="/app/channels">Content Channels</s-link>
+        <s-link href="/app/analytics">Analytics</s-link>
+        <s-link href="/app/billing">Billing</s-link>
+        <s-link href="/app/team">Team</s-link>
       </s-app-nav>
       <Outlet />
     </AppProvider>
