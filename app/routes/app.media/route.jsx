@@ -135,6 +135,43 @@ export const loader = async ({ request }) => {
   };
 };
 
+export const action = async ({ request }) => {
+  const { session } = await authenticate.admin(request);
+
+  const formData = await request.formData();
+  const url = formData.get("url");
+  const caption = formData.get("caption");
+  const status = formData.get("status");
+
+  // Validate URL
+  if (!url || url.trim() === "") {
+    return { error: "URL is required" };
+  }
+
+  // Check usage limits
+  const usageCheck = await canPerformAction(session.shop, "create_media");
+  
+  if (!usageCheck.allowed) {
+    return {
+      error: `Limit reached! Your ${usageCheck.plan} plan allows ${usageCheck.limit} media items. You currently have ${usageCheck.current}. Please upgrade to add more.`,
+      limitReached: true,
+    };
+  }
+
+  // Create media from URL
+  await prisma.media.create({
+    data: {
+      url: url.trim(),
+      caption: caption && caption.trim() !== "" ? caption.trim() : null,
+      status: status || "DRAFT",
+      sourceType: "URL",
+      tags: [],
+    },
+  });
+
+  return { redirect: "/app/media" };
+};
+
 export default function MediaRoute() {
   const { mediaList, filters, tagOptions, usage, usageCheck } = useLoaderData();
   const submit = useSubmit();
@@ -232,7 +269,7 @@ export default function MediaRoute() {
   const hasActiveFilters = filters.q || filters.status || filters.attached || filters.tag || filters.type;
 
   return (
-    <s-page heading="UGC Media">
+    <s-page heading="Media">
       {/* Usage Indicator */}
       {usageCheck && !usageCheck.allowed && (
         <s-section variant="critical">
@@ -327,216 +364,6 @@ export default function MediaRoute() {
         </s-section>
       )}
 
-      {/* Filter Bar */}
-      <s-section heading="Filters">
-        <Form id="media-filters-form" method="get" onSubmit={handleFilterSubmit} style={{ marginBottom: "1rem" }}>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-              gap: "1rem",
-              marginBottom: "1rem",
-            }}
-          >
-            {/* Search */}
-            <div>
-              <label htmlFor="filter-search" style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500", fontSize: "0.85rem" }}>
-                Search
-              </label>
-              <input
-                id="filter-search"
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="URL or caption..."
-                style={{
-                  width: "100%",
-                  padding: "0.5rem",
-                  border: "1px solid #ccc",
-                  borderRadius: "4px",
-                  fontSize: "0.9rem",
-                }}
-              />
-              <input type="hidden" name="q" value={searchQuery} />
-            </div>
-
-            {/* Media Type */}
-            <div>
-              <label htmlFor="filter-type" style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500", fontSize: "0.85rem" }}>
-                Media Type
-              </label>
-              <select
-                id="filter-type"
-                value={selectedType}
-                onChange={(e) => setSelectedType(e.target.value)}
-                style={{
-                  width: "100%",
-                  padding: "0.5rem",
-                  border: "1px solid #ccc",
-                  borderRadius: "4px",
-                  fontSize: "0.9rem",
-                }}
-              >
-                <option value="">All types</option>
-                <option value="images">📷 Images only</option>
-                <option value="videos">🎬 Videos only</option>
-              </select>
-              <input type="hidden" name="type" value={selectedType} />
-            </div>
-
-            {/* Status */}
-            <div>
-              <label htmlFor="filter-status" style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500", fontSize: "0.85rem" }}>
-                Status
-              </label>
-              <select
-                id="filter-status"
-                value={selectedStatus}
-                onChange={(e) => setSelectedStatus(e.target.value)}
-                style={{
-                  width: "100%",
-                  padding: "0.5rem",
-                  border: "1px solid #ccc",
-                  borderRadius: "4px",
-                  fontSize: "0.9rem",
-                }}
-              >
-                <option value="">All statuses</option>
-                <option value="DRAFT">Draft</option>
-                <option value="APPROVED">Approved</option>
-                <option value="REJECTED">Rejected</option>
-              </select>
-              <input type="hidden" name="status" value={selectedStatus} />
-            </div>
-
-            {/* Product Attached */}
-            <div>
-              <label htmlFor="filter-product" style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500", fontSize: "0.85rem" }}>
-                Product
-              </label>
-              <select
-                id="filter-product"
-                value={selectedAttached}
-                onChange={(e) => setSelectedAttached(e.target.value)}
-                style={{
-                  width: "100%",
-                  padding: "0.5rem",
-                  border: "1px solid #ccc",
-                  borderRadius: "4px",
-                  fontSize: "0.9rem",
-                }}
-              >
-                <option value="">All</option>
-                <option value="yes">Has product</option>
-                <option value="no">No product</option>
-              </select>
-              <input type="hidden" name="attached" value={selectedAttached} />
-            </div>
-
-            {/* Tag */}
-            <div>
-              <label htmlFor="filter-tag" style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500", fontSize: "0.85rem" }}>
-                Tag
-              </label>
-              <select
-                id="filter-tag"
-                value={selectedTag}
-                onChange={(e) => setSelectedTag(e.target.value)}
-                style={{
-                  width: "100%",
-                  padding: "0.5rem",
-                  border: "1px solid #ccc",
-                  borderRadius: "4px",
-                  fontSize: "0.9rem",
-                }}
-              >
-                <option value="">All tags</option>
-                {tagOptions.map((tag) => (
-                  <option key={tag.id} value={tag.slug}>
-                    {tag.name}
-                  </option>
-                ))}
-              </select>
-              <input type="hidden" name="tag" value={selectedTag} />
-            </div>
-          </div>
-
-          {/* Filter Actions */}
-          <div style={{ display: "flex", gap: "0.5rem" }}>
-            <button
-              type="button"
-              onClick={handleApplyFilters}
-              style={{
-                padding: "0.5rem 1.5rem",
-                background: "#0066cc",
-                color: "white",
-                border: "none",
-                borderRadius: "4px",
-                cursor: "pointer",
-                fontWeight: "500",
-                fontSize: "0.9rem",
-              }}
-            >
-              Apply Filters
-            </button>
-            
-            {hasActiveFilters && (
-              <button
-                type="button"
-                onClick={handleClearFilters}
-                style={{
-                  padding: "0.5rem 1.5rem",
-                  background: "white",
-                  color: "#666",
-                  border: "1px solid #ccc",
-                  borderRadius: "4px",
-                  cursor: "pointer",
-                  fontSize: "0.9rem",
-                }}
-              >
-                Clear Filters
-              </button>
-            )}
-          </div>
-
-          {/* Active Filters Display */}
-          {hasActiveFilters && (
-            <div style={{ marginTop: "1rem", display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-              {filters.q && (
-                <span style={{ padding: "0.375rem 0.75rem", background: "#e3f2fd", color: "#1976d2", borderRadius: "12px", fontSize: "0.8rem", fontWeight: "500" }}>
-                  Search: {filters.q}
-                </span>
-              )}
-              {filters.type && (
-                <span style={{ padding: "0.375rem 0.75rem", background: "#e3f2fd", color: "#1976d2", borderRadius: "12px", fontSize: "0.8rem", fontWeight: "500" }}>
-                  Type: {filters.type === "images" ? "Images" : "Videos"}
-                </span>
-              )}
-              {filters.status && (
-                <span style={{ padding: "0.375rem 0.75rem", background: "#e3f2fd", color: "#1976d2", borderRadius: "12px", fontSize: "0.8rem", fontWeight: "500" }}>
-                  Status: {filters.status}
-                </span>
-              )}
-              {filters.attached && (
-                <span style={{ padding: "0.375rem 0.75rem", background: "#e3f2fd", color: "#1976d2", borderRadius: "12px", fontSize: "0.8rem", fontWeight: "500" }}>
-                  Product: {filters.attached === "yes" ? "Attached" : "Not attached"}
-                </span>
-              )}
-              {filters.tag && (
-                <span style={{ padding: "0.375rem 0.75rem", background: "#e3f2fd", color: "#1976d2", borderRadius: "12px", fontSize: "0.8rem", fontWeight: "500" }}>
-                  Tag: {tagOptions.find((t) => t.slug === filters.tag)?.name || filters.tag}
-                </span>
-              )}
-            </div>
-          )}
-        </Form>
-        
-        <div style={{ fontSize: "0.85rem", color: "#666", marginTop: "0.5rem" }}>
-          Showing {mediaList.length} media items
-          {hasActiveFilters && " (filtered)"}
-        </div>
-      </s-section>
-
       {/* Upload Media */}
       <s-section heading="Upload Media">
         {!usageCheck?.allowed ? (
@@ -581,6 +408,201 @@ export default function MediaRoute() {
 
       {/* Media Library */}
       <s-section heading="Media Library">
+        {/* Compact Inline Filters (Shopify-style) */}
+        <Form id="media-filters-form" method="get" onSubmit={handleFilterSubmit} style={{ marginBottom: "1.5rem" }}>
+          <div
+            style={{
+              display: "flex",
+              gap: "0.75rem",
+              flexWrap: "wrap",
+              alignItems: "flex-end",
+              padding: "1rem",
+              background: "#f9f9f9",
+              borderRadius: "8px",
+              border: "1px solid #e0e0e0",
+            }}
+          >
+            {/* Search */}
+            <div style={{ flex: "1 1 200px" }}>
+              <input
+                id="filter-search"
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search..."
+                style={{
+                  width: "100%",
+                  padding: "0.5rem 0.75rem",
+                  border: "1px solid #ccc",
+                  borderRadius: "4px",
+                  fontSize: "0.875rem",
+                }}
+              />
+              <input type="hidden" name="q" value={searchQuery} />
+            </div>
+
+            {/* Media Type */}
+            <div style={{ flex: "0 1 140px" }}>
+              <select
+                id="filter-type"
+                value={selectedType}
+                onChange={(e) => setSelectedType(e.target.value)}
+                style={{
+                  width: "100%",
+                  padding: "0.5rem 0.75rem",
+                  border: "1px solid #ccc",
+                  borderRadius: "4px",
+                  fontSize: "0.875rem",
+                }}
+              >
+                <option value="">All types</option>
+                <option value="images">Images</option>
+                <option value="videos">Videos</option>
+              </select>
+              <input type="hidden" name="type" value={selectedType} />
+            </div>
+
+            {/* Status */}
+            <div style={{ flex: "0 1 130px" }}>
+              <select
+                id="filter-status"
+                value={selectedStatus}
+                onChange={(e) => setSelectedStatus(e.target.value)}
+                style={{
+                  width: "100%",
+                  padding: "0.5rem 0.75rem",
+                  border: "1px solid #ccc",
+                  borderRadius: "4px",
+                  fontSize: "0.875rem",
+                }}
+              >
+                <option value="">Status: All</option>
+                <option value="DRAFT">Draft</option>
+                <option value="APPROVED">Approved</option>
+                <option value="REJECTED">Rejected</option>
+              </select>
+              <input type="hidden" name="status" value={selectedStatus} />
+            </div>
+
+            {/* Tag */}
+            <div style={{ flex: "0 1 150px" }}>
+              <select
+                id="filter-tag"
+                value={selectedTag}
+                onChange={(e) => setSelectedTag(e.target.value)}
+                style={{
+                  width: "100%",
+                  padding: "0.5rem 0.75rem",
+                  border: "1px solid #ccc",
+                  borderRadius: "4px",
+                  fontSize: "0.875rem",
+                }}
+              >
+                <option value="">Tag: All</option>
+                {tagOptions.map((tag) => (
+                  <option key={tag.id} value={tag.slug}>
+                    {tag.name}
+                  </option>
+                ))}
+              </select>
+              <input type="hidden" name="tag" value={selectedTag} />
+            </div>
+
+            {/* Product */}
+            <div style={{ flex: "0 1 130px" }}>
+              <select
+                id="filter-product"
+                value={selectedAttached}
+                onChange={(e) => setSelectedAttached(e.target.value)}
+                style={{
+                  width: "100%",
+                  padding: "0.5rem 0.75rem",
+                  border: "1px solid #ccc",
+                  borderRadius: "4px",
+                  fontSize: "0.875rem",
+                }}
+              >
+                <option value="">Product: All</option>
+                <option value="yes">Tagged</option>
+                <option value="no">Untagged</option>
+              </select>
+              <input type="hidden" name="attached" value={selectedAttached} />
+            </div>
+
+            {/* Apply Button */}
+            <button
+              type="button"
+              onClick={handleApplyFilters}
+              style={{
+                padding: "0.5rem 1.25rem",
+                background: "#008060",
+                color: "white",
+                border: "none",
+                borderRadius: "4px",
+                cursor: "pointer",
+                fontWeight: "500",
+                fontSize: "0.875rem",
+              }}
+            >
+              Filter
+            </button>
+            
+            {hasActiveFilters && (
+              <button
+                type="button"
+                onClick={handleClearFilters}
+                style={{
+                  padding: "0.5rem 1rem",
+                  background: "white",
+                  color: "#666",
+                  border: "1px solid #ccc",
+                  borderRadius: "4px",
+                  cursor: "pointer",
+                  fontSize: "0.875rem",
+                }}
+              >
+                Clear
+              </button>
+            )}
+          </div>
+
+          {/* Active Filters Display */}
+          {hasActiveFilters && (
+            <div style={{ marginTop: "1rem", display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+              {filters.q && (
+                <span style={{ padding: "0.375rem 0.75rem", background: "#e3f2fd", color: "#1976d2", borderRadius: "12px", fontSize: "0.8rem", fontWeight: "500" }}>
+                  Search: {filters.q}
+                </span>
+              )}
+              {filters.type && (
+                <span style={{ padding: "0.375rem 0.75rem", background: "#e3f2fd", color: "#1976d2", borderRadius: "12px", fontSize: "0.8rem", fontWeight: "500" }}>
+                  Type: {filters.type === "images" ? "Images" : "Videos"}
+                </span>
+              )}
+              {filters.status && (
+                <span style={{ padding: "0.375rem 0.75rem", background: "#e3f2fd", color: "#1976d2", borderRadius: "12px", fontSize: "0.8rem", fontWeight: "500" }}>
+                  Status: {filters.status}
+                </span>
+              )}
+              {filters.attached && (
+                <span style={{ padding: "0.375rem 0.75rem", background: "#e3f2fd", color: "#1976d2", borderRadius: "12px", fontSize: "0.8rem", fontWeight: "500" }}>
+                  Product: {filters.attached === "yes" ? "Attached" : "Not attached"}
+                </span>
+              )}
+              {filters.tag && (
+                <span style={{ padding: "0.375rem 0.75rem", background: "#e3f2fd", color: "#1976d2", borderRadius: "12px", fontSize: "0.8rem", fontWeight: "500" }}>
+                  Tag: {tagOptions.find((t) => t.slug === filters.tag)?.name || filters.tag}
+                </span>
+              )}
+            </div>
+          )}
+        </Form>
+        
+        <div style={{ fontSize: "0.85rem", color: "#666", marginTop: "0.75rem" }}>
+          Showing {mediaList.length} media items
+          {hasActiveFilters && " (filtered)"}
+        </div>
+
         {/* Bulk Actions */}
         {someSelected && (
           <div

@@ -10,7 +10,7 @@ import db from "../db.server";
  * Uploads to Shopify Files API and creates Media records
  */
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
+  await authenticate.admin(request);
 
   try {
     const formData = await request.formData();
@@ -25,67 +25,24 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     for (const file of files) {
       if (!(file instanceof File)) continue;
 
-      // Convert file to base64 for Shopify Files API
+      // For now, store file as data URL to avoid stack overflow with large files
+      // In production, you'd upload to a CDN (Cloudinary, S3, etc.)
       const buffer = await file.arrayBuffer();
-      const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+      const bytes = new Uint8Array(buffer);
       const mimeType = file.type;
       const filename = file.name;
-
-      // Upload to Shopify Files API
-      const mutation = `#graphql
-        mutation fileCreate($files: [FileCreateInput!]!) {
-          fileCreate(files: $files) {
-            files {
-              ... on GenericFile {
-                id
-                url
-                alt
-              }
-              ... on MediaImage {
-                id
-                image {
-                  url
-                }
-              }
-            }
-            userErrors {
-              field
-              message
-            }
-          }
-        }
-      `;
-
-      const response = await admin.graphql(mutation, {
-        variables: {
-          files: [
-            {
-              alt: filename,
-              contentType: mimeType.startsWith("image/") ? "IMAGE" : "VIDEO",
-              originalSource: `data:${mimeType};base64,${base64}`,
-            },
-          ],
-        },
-      });
-
-      const result = await response.json();
-
-      if (result.data?.fileCreate?.userErrors?.length > 0) {
-        console.error("File upload error:", result.data.fileCreate.userErrors);
-        continue;
+      
+      // Convert to base64 in chunks to avoid stack overflow
+      let base64 = '';
+      const chunkSize = 0x8000; // 32KB chunks
+      for (let i = 0; i < bytes.length; i += chunkSize) {
+        base64 += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunkSize)));
       }
-
-      const uploadedFile = result.data?.fileCreate?.files?.[0];
-      let fileUrl = "";
-
-      if (uploadedFile) {
-        fileUrl = uploadedFile.url || uploadedFile.image?.url || "";
-      }
-
-      // If Shopify upload failed or URL is empty, use data URL as fallback
-      if (!fileUrl) {
-        fileUrl = `data:${mimeType};base64,${base64}`;
-      }
+      base64 = btoa(base64);
+      
+      // For MVP, use data URLs (works for small files)
+      // TODO: Integrate Cloudinary or S3 for production
+      const fileUrl = `data:${mimeType};base64,${base64}`;
 
       // Create media record
       const media = await db.media.create({

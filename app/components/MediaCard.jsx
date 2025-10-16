@@ -1,7 +1,6 @@
 // app/components/MediaCard.jsx
 // Visual card component for media items
 import { useState } from "react";
-import { Form } from "react-router";
 
 /* eslint-disable react/prop-types */
 export default function MediaCard({ media, isSelected, onSelect }) {
@@ -366,7 +365,6 @@ export default function MediaCard({ media, isSelected, onSelect }) {
                 if (e.key === "Escape") setIsAddingTag(false);
               }}
               placeholder="Tag name..."
-              autoFocus
               style={{
                 flex: 1,
                 padding: "4px 8px",
