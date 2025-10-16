@@ -1,4 +1,9 @@
 FROM node:20-alpine
+
+# Install pnpm
+RUN npm install -g pnpm
+
+# Install openssl for Prisma
 RUN apk add --no-cache openssl
 
 EXPOSE 3000
@@ -7,12 +12,18 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
-COPY package.json package-lock.json* ./
+# Copy package files
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 
-RUN npm ci --omit=dev && npm cache clean --force
+# Install dependencies
+RUN pnpm install --frozen-lockfile --prod
 
+# Copy application code
 COPY . .
 
-RUN npm run build
+# Generate Prisma client and build
+RUN pnpm prisma generate
+RUN pnpm build
 
-CMD ["npm", "run", "docker-start"]
+# Start command
+CMD ["sh", "-c", "pnpm prisma migrate deploy && pnpm start"]

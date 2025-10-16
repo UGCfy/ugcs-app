@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: ugcfy-app
+    runtime: node
+    plan: starter
+    region: oregon
+    buildCommand: pnpm install && pnpm prisma generate && pnpm build
+    startCommand: pnpm prisma migrate deploy && pnpm start
+    envVars:
+      - key: NODE_VERSION
+        value: 20.10.0
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false
+      - key: SHOPIFY_API_KEY
+        sync: false
+      - key: SHOPIFY_API_SECRET
+        sync: false
+      - key: SCOPES
+        value: write_products
+      - key: SHOPIFY_APP_URL
+        sync: false
+      - key: INSTAGRAM_APP_ID
+        sync: false
+      - key: INSTAGRAM_APP_SECRET
+        sync: false
+    healthCheckPath: /
+

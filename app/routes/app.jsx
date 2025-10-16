@@ -18,6 +18,7 @@ export default function App() {
       <s-app-nav>
         <s-link href="/app">Home</s-link>
         <s-link href="/app/media">Media</s-link>
+        <s-link href="/app/widget-setup">Widget Setup</s-link>
         <s-link href="/app/channels">Content Channels</s-link>
         <s-link href="/app/analytics">Analytics</s-link>
         <s-link href="/app/billing">Billing</s-link>

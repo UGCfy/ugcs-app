@@ -3,8 +3,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 model Session {
@@ -26,15 +27,18 @@ model Session {
 }
 
 model Media {
-  id         String     @id @default(cuid())
+  id         String       @id @default(cuid())
   url        String
   caption    String?
   productId  String?
-  sourceType SourceType @default(UPLOAD)
-  status     UGCStatus  @default(DRAFT)
-  tags       String[]
-  createdAt  DateTime   @default(now())
-  updatedAt  DateTime   @updatedAt
+  sourceType SourceType   @default(UPLOAD)
+  status     UGCStatus    @default(DRAFT)
+  tags       String[]     // Legacy: keep for backward compatibility
+  mediaTags  MediaTag[]   // New: normalized many-to-many relation
+  views      MediaView[]  // Analytics: view tracking
+  clicks     MediaClick[] // Analytics: click tracking
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
 }
 
 enum SourceType {
@@ -48,4 +52,111 @@ enum UGCStatus {
   DRAFT
   APPROVED
   REJECTED
+}
+
+model Tag {
+  id        String      @id @default(cuid())
+  name      String      @unique
+  slug      String      @unique
+  media     MediaTag[]
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  @@index([slug])
+}
+
+model MediaTag {
+  id        String   @id @default(cuid())
+  mediaId   String
+  tagId     String
+  media     Media    @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  tag       Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([mediaId, tagId])
+  @@index([mediaId])
+  @@index([tagId])
+}
+
+enum ChannelType {
+  INSTAGRAM
+  TIKTOK
+  YOUTUBE
+  FACEBOOK
+}
+
+enum ChannelStatus {
+  CONNECTED
+  DISCONNECTED
+  ERROR
+}
+
+enum MemberRole {
+  OWNER
+  ADMIN
+  EDITOR
+  VIEWER
+}
+
+model Channel {
+  id          String        @id @default(cuid())
+  name        String
+  type        ChannelType
+  status      ChannelStatus @default(DISCONNECTED)
+  username    String?
+  accessToken String?
+  expiresAt   DateTime?
+  metadata    String?       // JSON string for extra data
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+}
+
+// Analytics Models
+model MediaView {
+  id        String   @id @default(cuid())
+  mediaId   String
+  media     Media    @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  shopDomain String? // Which store viewed it
+  widgetId  String?  // Which widget it was viewed in
+  referrer  String?  // Where they came from
+  userAgent String?  // Device info
+  createdAt DateTime @default(now())
+
+  @@index([mediaId])
+  @@index([createdAt])
+  @@index([shopDomain])
+}
+
+model MediaClick {
+  id         String   @id @default(cuid())
+  mediaId    String
+  media      Media    @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  clickType  String   // "media" or "product"
+  productId  String?  // If they clicked on product
+  shopDomain String?
+  widgetId   String?
+  referrer   String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  @@index([mediaId])
+  @@index([productId])
+  @@index([createdAt])
+  @@index([shopDomain])
+}
+
+model TeamMember {
+  id          String     @id @default(cuid())
+  email       String     @unique
+  name        String?
+  role        MemberRole @default(VIEWER)
+  permissions String[]   // Granular permissions array
+  invitedAt   DateTime   @default(now())
+  joinedAt    DateTime?
+  isActive    Boolean    @default(true)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@index([email])
+  @@index([isActive])
 }
