@@ -1,13 +1,8 @@
 // app/components/MediaCard.jsx
 // Visual card component for media items
-import { useState } from "react";
 
 /* eslint-disable react/prop-types */
-export default function MediaCard({ media, isSelected, onSelect }) {
-  const [showActions, setShowActions] = useState(false);
-  const [newTag, setNewTag] = useState("");
-  const [isAddingTag, setIsAddingTag] = useState(false);
-
+export default function MediaCard({ media, isSelected, onSelect, onClick }) {
   const isVideo = media.url.match(/\.(mp4|webm|mov)$/i);
 
   const getBadgeColor = (status) => {
@@ -21,67 +16,12 @@ export default function MediaCard({ media, isSelected, onSelect }) {
     }
   };
 
-  const handleStatusUpdate = async (newStatus) => {
-    try {
-      await fetch("/api/media-status", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mediaId: media.id, status: newStatus }),
-      });
-      window.location.reload();
-    } catch (error) {
-      console.error("Status update failed:", error);
-    }
-  };
-
-  const handleAddTag = async () => {
-    if (!newTag.trim()) return;
-
-    try {
-      // Create tag if doesn't exist
-      const tagResp = await fetch("/api/tags", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newTag.trim() }),
-      });
-      const tagData = await tagResp.json();
-
-      // Link to media
-      await fetch("/api/media-tags", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mediaId: media.id, tagId: tagData.tag.id }),
-      });
-
-      setNewTag("");
-      setIsAddingTag(false);
-      window.location.reload();
-    } catch (error) {
-      console.error("Add tag failed:", error);
-    }
-  };
-
-  const handleRemoveTag = async (tagId) => {
-    try {
-      await fetch("/api/media-tags", {
-        method: "DELETE",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mediaId: media.id, tagId }),
-      });
-      window.location.reload();
-    } catch (error) {
-      console.error("Remove tag failed:", error);
-    }
-  };
-
   const statusColors = getBadgeColor(media.status);
 
   return (
     <div
+      role="button"
+      tabIndex={0}
       style={{
         position: "relative",
         background: isSelected ? "#e3f2fd" : "white",
@@ -90,9 +30,19 @@ export default function MediaCard({ media, isSelected, onSelect }) {
         overflow: "hidden",
         transition: "all 0.2s ease",
         boxShadow: isSelected ? "0 4px 12px rgba(22, 172, 241, 0.2)" : "0 2px 4px rgba(0,0,0,0.05)",
+        cursor: "pointer",
       }}
-      onMouseEnter={() => setShowActions(true)}
-      onMouseLeave={() => setShowActions(false)}
+      onClick={(e) => {
+        // Don't open lightbox if clicking checkbox
+        if (e.target.type === "checkbox") return;
+        onClick(media);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick(media);
+        }
+      }}
     >
       {/* Checkbox for bulk selection */}
       <div
@@ -126,6 +76,7 @@ export default function MediaCard({ media, isSelected, onSelect }) {
       >
         {isVideo ? (
           <>
+            {/* Video thumbnail - show first frame */}
             <video
               src={media.url}
               style={{
@@ -137,8 +88,10 @@ export default function MediaCard({ media, isSelected, onSelect }) {
                 objectFit: "cover",
               }}
               muted
+              playsInline
+              preload="metadata"
             />
-            {/* Video play icon */}
+            {/* Video play icon overlay */}
             <div
               style={{
                 position: "absolute",
@@ -148,12 +101,13 @@ export default function MediaCard({ media, isSelected, onSelect }) {
                 width: "60px",
                 height: "60px",
                 borderRadius: "50%",
-                background: "rgba(0,0,0,0.7)",
+                background: "rgba(0,0,0,0.8)",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
                 fontSize: "24px",
                 color: "white",
+                boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
               }}
             >
               ▶
@@ -171,6 +125,7 @@ export default function MediaCard({ media, isSelected, onSelect }) {
               height: "100%",
               objectFit: "cover",
             }}
+            loading="lazy"
           />
         )}
 
@@ -215,59 +170,6 @@ export default function MediaCard({ media, isSelected, onSelect }) {
           {media.sourceType === "URL" && "🔗 URL"}
         </div>
 
-        {/* Quick Actions Overlay */}
-        {showActions && (
-          <div
-            style={{
-              position: "absolute",
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              background: "rgba(0,0,0,0.7)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: "8px",
-              padding: "1rem",
-            }}
-          >
-            {media.status !== "APPROVED" && (
-              <button
-                onClick={() => handleStatusUpdate("APPROVED")}
-                style={{
-                  padding: "8px 16px",
-                  background: "#008060",
-                  color: "white",
-                  border: "none",
-                  borderRadius: "6px",
-                  cursor: "pointer",
-                  fontSize: "0.8rem",
-                  fontWeight: "600",
-                }}
-              >
-                ✓ Approve
-              </button>
-            )}
-            {media.status !== "REJECTED" && (
-              <button
-                onClick={() => handleStatusUpdate("REJECTED")}
-                style={{
-                  padding: "8px 16px",
-                  background: "#dc3545",
-                  color: "white",
-                  border: "none",
-                  borderRadius: "6px",
-                  cursor: "pointer",
-                  fontSize: "0.8rem",
-                  fontWeight: "600",
-                }}
-              >
-                ✕ Reject
-              </button>
-            )}
-          </div>
-        )}
       </div>
 
       {/* Card Content */}
@@ -302,93 +204,30 @@ export default function MediaCard({ media, isSelected, onSelect }) {
         ) : null}
 
         {/* Tags */}
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "4px", marginBottom: "8px" }}>
-          {media.mediaTags?.map((mt) => (
-            <span
-              key={mt.tag.id}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "4px",
-                padding: "3px 8px",
-                background: "#f0f0f0",
-                borderRadius: "12px",
-                fontSize: "0.7rem",
-                color: "#666",
-              }}
-            >
-              {mt.tag.name}
-              <button
-                onClick={() => handleRemoveTag(mt.tag.id)}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "4px", marginBottom: "8px", minHeight: "24px" }}>
+          {media.mediaTags && media.mediaTags.length > 0 ? (
+            media.mediaTags.map((mt) => (
+              <span
+                key={mt.tag.id}
                 style={{
-                  background: "none",
-                  border: "none",
-                  color: "#999",
-                  cursor: "pointer",
-                  padding: 0,
-                  fontSize: "0.9rem",
-                  lineHeight: 1,
+                  display: "inline-block",
+                  padding: "3px 8px",
+                  background: "#e3f2fd",
+                  color: "#1976d2",
+                  borderRadius: "12px",
+                  fontSize: "0.7rem",
+                  fontWeight: "500",
                 }}
               >
-                ×
-              </button>
+                {mt.tag.name}
+              </span>
+            ))
+          ) : (
+            <span style={{ fontSize: "0.7rem", color: "#999", fontStyle: "italic" }}>
+              No tags
             </span>
-          ))}
-          
-          {!isAddingTag && (
-            <button
-              onClick={() => setIsAddingTag(true)}
-              style={{
-                padding: "3px 8px",
-                background: "transparent",
-                border: "1px dashed #ccc",
-                borderRadius: "12px",
-                fontSize: "0.7rem",
-                color: "#999",
-                cursor: "pointer",
-              }}
-            >
-              + Tag
-            </button>
           )}
         </div>
-
-        {/* Add tag input */}
-        {isAddingTag && (
-          <div style={{ display: "flex", gap: "4px", marginBottom: "8px" }}>
-            <input
-              type="text"
-              value={newTag}
-              onChange={(e) => setNewTag(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleAddTag();
-                if (e.key === "Escape") setIsAddingTag(false);
-              }}
-              placeholder="Tag name..."
-              style={{
-                flex: 1,
-                padding: "4px 8px",
-                border: "1px solid #ccc",
-                borderRadius: "4px",
-                fontSize: "0.75rem",
-              }}
-            />
-            <button
-              onClick={handleAddTag}
-              style={{
-                padding: "4px 12px",
-                background: "#008060",
-                color: "white",
-                border: "none",
-                borderRadius: "4px",
-                cursor: "pointer",
-                fontSize: "0.75rem",
-              }}
-            >
-              Add
-            </button>
-          </div>
-        )}
 
         {/* Created date */}
         <div style={{ fontSize: "0.7rem", color: "#999", marginTop: "8px" }}>

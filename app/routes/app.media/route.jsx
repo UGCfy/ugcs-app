@@ -4,6 +4,7 @@ import { authenticate } from "../../shopify.server";
 import prisma from "../../db.server";
 import FileUploader from "../../components/FileUploader";
 import MediaCard from "../../components/MediaCard";
+import MediaLightbox from "../../components/MediaLightbox";
 import { canPerformAction, getUsageStats } from "../../lib/usage-limits";
 
 export const loader = async ({ request }) => {
@@ -60,6 +61,12 @@ export const loader = async ({ request }) => {
       mediaTags: {
         include: { tag: true },
       },
+      _count: {
+        select: {
+          views: true,
+          clicks: true,
+        },
+      },
     },
     orderBy: { createdAt: "desc" },
     take: 100,
@@ -108,7 +115,7 @@ export const loader = async ({ request }) => {
     }
   }
 
-  // Attach product data to media
+  // Attach product data and analytics to media
   const mediaList = media.map((m) => ({
     ...m,
     product: m.productId ? productMap[m.productId] : null,
@@ -120,6 +127,7 @@ export const loader = async ({ request }) => {
         slug: mt.tag.slug,
       },
     })),
+    _count: m._count,
   }));
 
   // Get usage stats for plan limits
@@ -185,6 +193,9 @@ export default function MediaRoute() {
   // Bulk selection state
   const [selectedItems, setSelectedItems] = useState([]);
   const [isBulkUpdating, setIsBulkUpdating] = useState(false);
+
+  // Lightbox state
+  const [lightboxMedia, setLightboxMedia] = useState(null);
 
   const handleSelectItem = (id, checked) => {
     if (checked) {
@@ -729,12 +740,23 @@ export default function MediaRoute() {
                   media={media}
                   isSelected={selectedItems.includes(media.id)}
                   onSelect={handleSelectItem}
+                  onClick={setLightboxMedia}
                 />
               ))}
             </div>
           </>
         )}
       </s-section>
+
+      {/* Lightbox Modal */}
+      {lightboxMedia && (
+        <MediaLightbox
+          media={lightboxMedia}
+          allMedia={mediaList}
+          onClose={() => setLightboxMedia(null)}
+          onNavigate={setLightboxMedia}
+        />
+      )}
     </s-page>
   );
 }
