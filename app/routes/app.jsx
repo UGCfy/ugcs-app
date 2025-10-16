@@ -7,11 +7,65 @@ export const loader = async ({ request }) => {
   await authenticate.admin(request);
 
   // eslint-disable-next-line no-undef
-  return { apiKey: process.env.SHOPIFY_API_KEY || "" };
+  const nodeEnv = process.env.NODE_ENV || "development";
+  // eslint-disable-next-line no-undef
+  const appUrl = process.env.SHOPIFY_APP_URL || "";
+  
+  // Determine server type
+  const serverType = appUrl.includes("onrender.com") ? "Render" : 
+                     appUrl.includes("trycloudflare.com") ? "Local" : 
+                     "Unknown";
+
+  return { 
+    // eslint-disable-next-line no-undef
+    apiKey: process.env.SHOPIFY_API_KEY || "",
+    environment: {
+      type: nodeEnv,
+      server: serverType,
+      url: appUrl,
+    },
+  };
 };
 
 export default function App() {
-  const { apiKey } = useLoaderData();
+  const { apiKey, environment } = useLoaderData();
+
+  const getServerBadgeStyle = () => {
+    const baseStyle = {
+      position: "fixed",
+      bottom: "12px",
+      right: "12px",
+      padding: "6px 12px",
+      borderRadius: "6px",
+      fontSize: "11px",
+      fontWeight: "600",
+      zIndex: 9999,
+      boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+      display: "flex",
+      alignItems: "center",
+      gap: "6px",
+    };
+
+    if (environment.server === "Render") {
+      return {
+        ...baseStyle,
+        background: "#008060",
+        color: "white",
+      };
+    } else if (environment.server === "Local") {
+      return {
+        ...baseStyle,
+        background: "#f49342",
+        color: "white",
+      };
+    } else {
+      return {
+        ...baseStyle,
+        background: "#666",
+        color: "white",
+      };
+    }
+  };
 
   return (
     <AppProvider embedded apiKey={apiKey}>
@@ -25,6 +79,15 @@ export default function App() {
         <s-link href="/app/team">Team</s-link>
       </s-app-nav>
       <Outlet />
+      
+      {/* Environment Indicator */}
+      <div style={getServerBadgeStyle()}>
+        <span>{environment.server === "Render" ? "🌐" : environment.server === "Local" ? "💻" : "❓"}</span>
+        <span>
+          {environment.server} Server
+          {environment.type === "development" && " (Dev)"}
+        </span>
+      </div>
     </AppProvider>
   );
 }
