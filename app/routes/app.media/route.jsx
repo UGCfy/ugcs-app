@@ -1,13 +1,12 @@
-import { useLoaderData, useActionData, Form, redirect, useSubmit } from "react-router";
+import { useLoaderData, Form, useSubmit } from "react-router";
 import { useState } from "react";
 import { authenticate } from "../../shopify.server";
 import prisma from "../../db.server";
-import ProductAttach from "../../components/ProductAttach";
+import FileUploader from "../../components/FileUploader";
+import MediaCard from "../../components/MediaCard";
 import { canPerformAction, getUsageStats } from "../../lib/usage-limits";
 
 export const loader = async ({ request }) => {
-  // Temporarily comment out auth to avoid OAuth redirects during dev
-  // Uncomment when ready to deploy:
   const { admin, session } = await authenticate.admin(request);
 
   // Parse filter params
@@ -16,6 +15,7 @@ export const loader = async ({ request }) => {
   const tag = (url.searchParams.get("tag") || "").trim();
   const status = (url.searchParams.get("status") || "").trim();
   const attached = (url.searchParams.get("attached") || "").trim();
+  const mediaType = (url.searchParams.get("type") || "").trim();
 
   // Build where clause
   const where = {
@@ -38,6 +38,19 @@ export const loader = async ({ request }) => {
             },
           }
         : {},
+      // Media type filter
+      mediaType === "images"
+        ? {
+            AND: [
+              { url: { not: { endsWith: ".mp4" } } },
+              { url: { not: { endsWith: ".webm" } } },
+              { url: { not: { endsWith: ".mov" } } },
+            ],
+          }
+        : {},
+      mediaType === "videos"
+        ? { OR: [{ url: { endsWith: ".mp4" } }, { url: { endsWith: ".webm" } }, { url: { endsWith: ".mov" } }] }
+        : {},
     ],
   };
 
@@ -49,7 +62,7 @@ export const loader = async ({ request }) => {
       },
     },
     orderBy: { createdAt: "desc" },
-    take: 50,
+    take: 100,
   });
 
   // Fetch tag options for filter dropdown
@@ -59,32 +72,31 @@ export const loader = async ({ request }) => {
     select: { id: true, name: true, slug: true },
   });
 
-  // Fetch product titles from Shopify
-  const productIds = Array.from(
-    new Set(media.map((m) => m.productId).filter(Boolean))
-  );
+  // Fetch product details for media with productId
+  const productIds = media.map((m) => m.productId).filter(Boolean);
+  const productMap = {};
 
-  let productMap = {};
   if (productIds.length > 0) {
-    try {
-      const gql = `#graphql
-        query Products($ids: [ID!]!) {
-          nodes(ids: $ids) {
-            ... on Product {
-              id
-              title
-              featuredImage {
-                url
-              }
+    const gql = `#graphql
+      query GetProducts($ids: [ID!]!) {
+        nodes(ids: $ids) {
+          ... on Product {
+            id
+            title
+            featuredImage {
+              url(transform: { maxWidth: 100, maxHeight: 100 })
             }
           }
         }
-      `;
+      }
+    `;
+
+    try {
       const resp = await admin.graphql(gql, { variables: { ids: productIds } });
       const json = await resp.json();
 
       for (const node of json.data?.nodes || []) {
-        if (node && node.id) {
+        if (node?.id) {
           productMap[node.id] = {
             title: node.title,
             image: node.featuredImage?.url,
@@ -96,19 +108,17 @@ export const loader = async ({ request }) => {
     }
   }
 
-  // Shape data to include tags and product info
+  // Attach product data to media
   const mediaList = media.map((m) => ({
-    id: m.id,
-    url: m.url,
-    caption: m.caption,
-    productId: m.productId,
+    ...m,
     product: m.productId ? productMap[m.productId] : null,
-    status: m.status,
-    createdAt: m.createdAt,
-    tags: m.mediaTags.map((mt) => ({
-      id: mt.tag.id,
-      name: mt.tag.name,
-      slug: mt.tag.slug,
+    mediaTags: m.mediaTags.map((mt) => ({
+      id: mt.id,
+      tag: {
+        id: mt.tag.id,
+        name: mt.tag.name,
+        slug: mt.tag.slug,
+      },
     })),
   }));
 
@@ -118,326 +128,35 @@ export const loader = async ({ request }) => {
 
   return {
     mediaList,
-    filters: { q, tag, status, attached },
+    filters: { q, tag, status, attached, type: mediaType },
     tagOptions,
     usage,
     usageCheck,
   };
 };
 
-export const action = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
-
-  const formData = await request.formData();
-  const url = formData.get("url");
-  const caption = formData.get("caption");
-  const status = formData.get("status");
-
-  // Validate URL is non-empty
-  if (!url || url.trim() === "") {
-    return { error: "URL is required" };
-  }
-
-  // Check usage limits before creating
-  const usageCheck = await canPerformAction(session.shop, "create_media");
-  
-  if (!usageCheck.allowed) {
-    return {
-      error: `Limit reached! Your ${usageCheck.plan} plan allows ${usageCheck.limit} media items. You currently have ${usageCheck.current}. Please upgrade to add more.`,
-      limitReached: true,
-    };
-  }
-
-  // Create new media record
-  await prisma.media.create({
-    data: {
-      url: url.trim(),
-      caption: caption && caption.trim() !== "" ? caption.trim() : null,
-      status: status || "DRAFT",
-      sourceType: "UPLOAD",
-      tags: [],
-    },
-  });
-
-  return redirect("/app/media");
-};
-
-/* eslint-disable react/prop-types */
-function MediaRow({ media, getBadgeStyle, isSelected, onSelect }) {
-  const [newTag, setNewTag] = useState("");
-  const [isAddingTag, setIsAddingTag] = useState(false);
-  const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
-
-  const handleAddTag = async () => {
-    const name = newTag.trim();
-    if (!name) return;
-    
-    setIsAddingTag(true);
-    try {
-      // 1) Create/upsert tag
-      const tagRes = await fetch("/api/tags", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name }),
-      });
-      const tag = await tagRes.json();
-
-      // 2) Link tag to media
-      await fetch("/api/media-tags", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mediaId: media.id, tagId: tag.id }),
-      });
-
-      setNewTag("");
-      // Reload to show new tag
-      window.location.reload();
-    } catch (error) {
-      console.error("Failed to add tag:", error);
-      setIsAddingTag(false);
-    }
-  };
-
-  const handleRemoveTag = async (tagId) => {
-    try {
-      await fetch("/api/media-tags", {
-        method: "DELETE",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mediaId: media.id, tagId }),
-      });
-      // Reload to reflect removal
-      window.location.reload();
-    } catch (error) {
-      console.error("Failed to remove tag:", error);
-    }
-  };
-
-  const handleStatusChange = async (newStatus) => {
-    setIsUpdatingStatus(true);
-    try {
-      await fetch("/api/media-status", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mediaId: media.id, status: newStatus }),
-      });
-      window.location.reload();
-    } catch (error) {
-      console.error("Failed to update status:", error);
-      setIsUpdatingStatus(false);
-    }
-  };
-
-  return (
-    <tr style={{ borderBottom: "1px solid #ddd", backgroundColor: isSelected ? "#f0f8ff" : "transparent" }}>
-      {/* Checkbox */}
-      <td style={{ padding: "0.75rem" }}>
-        <input
-          type="checkbox"
-          checked={isSelected}
-          onChange={() => onSelect(media.id)}
-          style={{ cursor: "pointer" }}
-        />
-      </td>
-      
-      {/* Thumbnail */}
-      <td style={{ padding: "0.75rem" }}>
-        <div
-          style={{
-            width: "60px",
-            height: "60px",
-            backgroundImage: `url(${media.url})`,
-            backgroundSize: "cover",
-            backgroundPosition: "center",
-            borderRadius: "4px",
-            border: "1px solid #ddd",
-          }}
-          title={media.url}
-        />
-      </td>
-
-      {/* Caption */}
-      <td style={{ padding: "0.75rem" }}>{media.caption || "—"}</td>
-
-      {/* Status */}
-      <td style={{ padding: "0.75rem" }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-          {/* Status Badge */}
-          <span style={getBadgeStyle(media.status)}>{media.status}</span>
-          
-          {/* Status Controls */}
-          <div style={{ display: "flex", gap: "0.25rem" }}>
-            <button
-              onClick={() => handleStatusChange("DRAFT")}
-              disabled={isUpdatingStatus || media.status === "DRAFT"}
-              style={{
-                padding: "0.25rem 0.5rem",
-                backgroundColor: media.status === "DRAFT" ? "#666" : "#f0f0f0",
-                color: media.status === "DRAFT" ? "white" : "#333",
-                border: "1px solid #ccc",
-                borderRadius: "4px",
-                cursor: isUpdatingStatus || media.status === "DRAFT" ? "not-allowed" : "pointer",
-                fontSize: "0.75rem",
-                fontWeight: media.status === "DRAFT" ? "600" : "400",
-              }}
-            >
-              Draft
-            </button>
-            <button
-              onClick={() => handleStatusChange("APPROVED")}
-              disabled={isUpdatingStatus || media.status === "APPROVED"}
-              style={{
-                padding: "0.25rem 0.5rem",
-                backgroundColor: media.status === "APPROVED" ? "#28a745" : "#f0f0f0",
-                color: media.status === "APPROVED" ? "white" : "#333",
-                border: "1px solid #ccc",
-                borderRadius: "4px",
-                cursor: isUpdatingStatus || media.status === "APPROVED" ? "not-allowed" : "pointer",
-                fontSize: "0.75rem",
-                fontWeight: media.status === "APPROVED" ? "600" : "400",
-              }}
-            >
-              Approve
-            </button>
-            <button
-              onClick={() => handleStatusChange("REJECTED")}
-              disabled={isUpdatingStatus || media.status === "REJECTED"}
-              style={{
-                padding: "0.25rem 0.5rem",
-                backgroundColor: media.status === "REJECTED" ? "#dc3545" : "#f0f0f0",
-                color: media.status === "REJECTED" ? "white" : "#333",
-                border: "1px solid #ccc",
-                borderRadius: "4px",
-                cursor: isUpdatingStatus || media.status === "REJECTED" ? "not-allowed" : "pointer",
-                fontSize: "0.75rem",
-                fontWeight: media.status === "REJECTED" ? "600" : "400",
-              }}
-            >
-              Reject
-            </button>
-          </div>
-        </div>
-      </td>
-
-      {/* Product */}
-      <td style={{ padding: "0.75rem" }}>
-        <ProductAttach
-          mediaId={media.id}
-          productId={media.productId}
-          product={media.product}
-        />
-      </td>
-
-      {/* Created */}
-      <td style={{ padding: "0.75rem" }}>
-        {new Date(media.createdAt).toLocaleDateString("en-US", {
-          year: "numeric",
-          month: "short",
-          day: "numeric",
-        })}
-      </td>
-
-      {/* Tags */}
-      <td style={{ padding: "0.75rem" }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-          {/* Tag chips */}
-          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-            {media.tags?.map((tag) => (
-              <span
-                key={tag.id}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "0.25rem",
-                  padding: "0.25rem 0.5rem",
-                  backgroundColor: "#e3f2fd",
-                  color: "#1976d2",
-                  borderRadius: "12px",
-                  fontSize: "0.75rem",
-                  fontWeight: "500",
-                }}
-              >
-                {tag.name}
-                <button
-                  onClick={() => handleRemoveTag(tag.id)}
-                  style={{
-                    background: "none",
-                    border: "none",
-                    color: "#1976d2",
-                    cursor: "pointer",
-                    padding: "0",
-                    fontSize: "1rem",
-                    lineHeight: "1",
-                  }}
-                  title="Remove tag"
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-          </div>
-
-          {/* Add tag input */}
-          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-            <input
-              type="text"
-              value={newTag}
-              onChange={(e) => setNewTag(e.target.value)}
-              onKeyPress={(e) => e.key === "Enter" && handleAddTag()}
-              placeholder="Add tag..."
-              disabled={isAddingTag}
-              style={{
-                padding: "0.25rem 0.5rem",
-                border: "1px solid #ccc",
-                borderRadius: "4px",
-                fontSize: "0.875rem",
-                width: "120px",
-              }}
-            />
-            <button
-              onClick={handleAddTag}
-              disabled={isAddingTag || !newTag.trim()}
-              style={{
-                padding: "0.25rem 0.5rem",
-                backgroundColor: isAddingTag ? "#ccc" : "#008060",
-                color: "white",
-                border: "none",
-                borderRadius: "4px",
-                cursor: isAddingTag ? "not-allowed" : "pointer",
-                fontSize: "0.875rem",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {isAddingTag ? "..." : "Add"}
-            </button>
-          </div>
-        </div>
-      </td>
-    </tr>
-  );
-}
-/* eslint-enable react/prop-types */
-
 export default function MediaRoute() {
   const { mediaList, filters, tagOptions, usage, usageCheck } = useLoaderData();
-  const actionData = useActionData();
   const submit = useSubmit();
   
   const [searchQuery, setSearchQuery] = useState(filters.q || "");
   const [selectedStatus, setSelectedStatus] = useState(filters.status || "");
   const [selectedAttached, setSelectedAttached] = useState(filters.attached || "");
   const [selectedTag, setSelectedTag] = useState(filters.tag || "");
+  const [selectedType, setSelectedType] = useState(filters.type || "");
   
   // Bulk selection state
   const [selectedItems, setSelectedItems] = useState([]);
   const [isBulkUpdating, setIsBulkUpdating] = useState(false);
-  
-  const allSelected = selectedItems.length === mediaList.length && mediaList.length > 0;
-  const someSelected = selectedItems.length > 0;
-  
+
+  const handleSelectItem = (id, checked) => {
+    if (checked) {
+      setSelectedItems([...selectedItems, id]);
+    } else {
+      setSelectedItems(selectedItems.filter((item) => item !== id));
+    }
+  };
+
   const handleSelectAll = (e) => {
     if (e.target.checked) {
       setSelectedItems(mediaList.map((m) => m.id));
@@ -445,26 +164,29 @@ export default function MediaRoute() {
       setSelectedItems([]);
     }
   };
-  
-  const handleSelectItem = (id) => {
-    setSelectedItems((prev) =>
-      prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
-    );
-  };
-  
-  const handleBulkStatus = async (newStatus) => {
-    if (!selectedItems.length) return;
+
+  const allSelected = mediaList.length > 0 && selectedItems.length === mediaList.length;
+  const someSelected = selectedItems.length > 0;
+
+  const handleBulkUpdate = async (newStatus) => {
+    if (!someSelected) return;
     
     setIsBulkUpdating(true);
+    
     try {
-      await fetch("/api/media-bulk", {
+      const response = await fetch("/api/media-bulk", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ids: selectedItems, status: newStatus }),
+        body: JSON.stringify({
+          mediaIds: selectedItems,
+          status: newStatus,
+        }),
       });
+
+      if (!response.ok) throw new Error("Bulk update failed");
       
-      // Refresh while preserving filters
+      // Reload page to see updates
       const form = document.getElementById("media-filters-form");
       if (form) {
         submit(form, { method: "get", replace: true, preventScrollReset: true });
@@ -478,29 +200,9 @@ export default function MediaRoute() {
     }
   };
 
-  const getBadgeStyle = (status) => {
-    const baseStyle = {
-      display: "inline-block",
-      padding: "0.25rem 0.5rem",
-      borderRadius: "4px",
-      fontSize: "0.875rem",
-      fontWeight: "500",
-    };
-
-    switch (status) {
-      case "APPROVED":
-        return { ...baseStyle, backgroundColor: "#d4edda", color: "#155724" };
-      case "REJECTED":
-        return { ...baseStyle, backgroundColor: "#f8d7da", color: "#721c24" };
-      case "DRAFT":
-      default:
-        return { ...baseStyle, backgroundColor: "#fff3cd", color: "#856404" };
-    }
-  };
-
   const handleFilterSubmit = (e) => {
     e.preventDefault();
-    // Use React Router submit to stay within the app (keeps session, no full page reload)
+    // Use React Router submit to stay within the app
     submit(e.currentTarget, { method: "get", replace: true, preventScrollReset: true });
   };
 
@@ -516,18 +218,18 @@ export default function MediaRoute() {
     setSelectedStatus("");
     setSelectedAttached("");
     setSelectedTag("");
+    setSelectedType("");
     
     // Submit empty form
     const form = document.getElementById("media-filters-form");
     if (form) {
-      // Clear all inputs first
       setTimeout(() => {
         submit(form, { method: "get", replace: true, preventScrollReset: true });
       }, 0);
     }
   };
 
-  const hasActiveFilters = filters.q || filters.status || filters.attached || filters.tag;
+  const hasActiveFilters = filters.q || filters.status || filters.attached || filters.tag || filters.type;
 
   return (
     <s-page heading="UGC Media">
@@ -631,14 +333,14 @@ export default function MediaRoute() {
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
               gap: "1rem",
               marginBottom: "1rem",
             }}
           >
             {/* Search */}
             <div>
-              <label htmlFor="filter-search" style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500" }}>
+              <label htmlFor="filter-search" style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500", fontSize: "0.85rem" }}>
                 Search
               </label>
               <input
@@ -652,15 +354,39 @@ export default function MediaRoute() {
                   padding: "0.5rem",
                   border: "1px solid #ccc",
                   borderRadius: "4px",
+                  fontSize: "0.9rem",
                 }}
               />
-              {/* Hidden input to ensure value is submitted */}
               <input type="hidden" name="q" value={searchQuery} />
+            </div>
+
+            {/* Media Type */}
+            <div>
+              <label htmlFor="filter-type" style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500", fontSize: "0.85rem" }}>
+                Media Type
+              </label>
+              <select
+                id="filter-type"
+                value={selectedType}
+                onChange={(e) => setSelectedType(e.target.value)}
+                style={{
+                  width: "100%",
+                  padding: "0.5rem",
+                  border: "1px solid #ccc",
+                  borderRadius: "4px",
+                  fontSize: "0.9rem",
+                }}
+              >
+                <option value="">All types</option>
+                <option value="images">📷 Images only</option>
+                <option value="videos">🎬 Videos only</option>
+              </select>
+              <input type="hidden" name="type" value={selectedType} />
             </div>
 
             {/* Status */}
             <div>
-              <label htmlFor="filter-status" style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500" }}>
+              <label htmlFor="filter-status" style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500", fontSize: "0.85rem" }}>
                 Status
               </label>
               <select
@@ -672,6 +398,7 @@ export default function MediaRoute() {
                   padding: "0.5rem",
                   border: "1px solid #ccc",
                   borderRadius: "4px",
+                  fontSize: "0.9rem",
                 }}
               >
                 <option value="">All statuses</option>
@@ -679,13 +406,12 @@ export default function MediaRoute() {
                 <option value="APPROVED">Approved</option>
                 <option value="REJECTED">Rejected</option>
               </select>
-              {/* Hidden input to ensure value is submitted */}
               <input type="hidden" name="status" value={selectedStatus} />
             </div>
 
             {/* Product Attached */}
             <div>
-              <label htmlFor="filter-product" style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500" }}>
+              <label htmlFor="filter-product" style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500", fontSize: "0.85rem" }}>
                 Product
               </label>
               <select
@@ -697,19 +423,19 @@ export default function MediaRoute() {
                   padding: "0.5rem",
                   border: "1px solid #ccc",
                   borderRadius: "4px",
+                  fontSize: "0.9rem",
                 }}
               >
                 <option value="">All</option>
                 <option value="yes">Has product</option>
                 <option value="no">No product</option>
               </select>
-              {/* Hidden input to ensure value is submitted */}
               <input type="hidden" name="attached" value={selectedAttached} />
             </div>
 
             {/* Tag */}
             <div>
-              <label htmlFor="filter-tag" style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500" }}>
+              <label htmlFor="filter-tag" style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500", fontSize: "0.85rem" }}>
                 Tag
               </label>
               <select
@@ -721,6 +447,7 @@ export default function MediaRoute() {
                   padding: "0.5rem",
                   border: "1px solid #ccc",
                   borderRadius: "4px",
+                  fontSize: "0.9rem",
                 }}
               >
                 <option value="">All tags</option>
@@ -730,7 +457,6 @@ export default function MediaRoute() {
                   </option>
                 ))}
               </select>
-              {/* Hidden input to ensure value is submitted */}
               <input type="hidden" name="tag" value={selectedTag} />
             </div>
           </div>
@@ -741,386 +467,252 @@ export default function MediaRoute() {
               type="button"
               onClick={handleApplyFilters}
               style={{
-                padding: "0.5rem 1rem",
-                backgroundColor: "#008060",
+                padding: "0.5rem 1.5rem",
+                background: "#0066cc",
                 color: "white",
                 border: "none",
                 borderRadius: "4px",
                 cursor: "pointer",
                 fontWeight: "500",
+                fontSize: "0.9rem",
               }}
             >
               Apply Filters
             </button>
+            
             {hasActiveFilters && (
               <button
                 type="button"
                 onClick={handleClearFilters}
                 style={{
-                  padding: "0.5rem 1rem",
-                  backgroundColor: "#dc3545",
-                  color: "white",
-                  border: "none",
+                  padding: "0.5rem 1.5rem",
+                  background: "white",
+                  color: "#666",
+                  border: "1px solid #ccc",
                   borderRadius: "4px",
                   cursor: "pointer",
-                  fontWeight: "500",
+                  fontSize: "0.9rem",
                 }}
               >
-                Clear All
+                Clear Filters
               </button>
             )}
           </div>
+
+          {/* Active Filters Display */}
+          {hasActiveFilters && (
+            <div style={{ marginTop: "1rem", display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+              {filters.q && (
+                <span style={{ padding: "0.375rem 0.75rem", background: "#e3f2fd", color: "#1976d2", borderRadius: "12px", fontSize: "0.8rem", fontWeight: "500" }}>
+                  Search: {filters.q}
+                </span>
+              )}
+              {filters.type && (
+                <span style={{ padding: "0.375rem 0.75rem", background: "#e3f2fd", color: "#1976d2", borderRadius: "12px", fontSize: "0.8rem", fontWeight: "500" }}>
+                  Type: {filters.type === "images" ? "Images" : "Videos"}
+                </span>
+              )}
+              {filters.status && (
+                <span style={{ padding: "0.375rem 0.75rem", background: "#e3f2fd", color: "#1976d2", borderRadius: "12px", fontSize: "0.8rem", fontWeight: "500" }}>
+                  Status: {filters.status}
+                </span>
+              )}
+              {filters.attached && (
+                <span style={{ padding: "0.375rem 0.75rem", background: "#e3f2fd", color: "#1976d2", borderRadius: "12px", fontSize: "0.8rem", fontWeight: "500" }}>
+                  Product: {filters.attached === "yes" ? "Attached" : "Not attached"}
+                </span>
+              )}
+              {filters.tag && (
+                <span style={{ padding: "0.375rem 0.75rem", background: "#e3f2fd", color: "#1976d2", borderRadius: "12px", fontSize: "0.8rem", fontWeight: "500" }}>
+                  Tag: {tagOptions.find((t) => t.slug === filters.tag)?.name || filters.tag}
+                </span>
+              )}
+            </div>
+          )}
         </Form>
-
-        {/* Active Filter Badges */}
-        {hasActiveFilters && (
-          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "1rem" }}>
-            {filters.q && (
-              <span
-                style={{
-                  padding: "0.25rem 0.5rem",
-                  backgroundColor: "#e3f2fd",
-                  color: "#1976d2",
-                  borderRadius: "12px",
-                  fontSize: "0.875rem",
-                }}
-              >
-                Search: {filters.q}
-              </span>
-            )}
-            {filters.status && (
-              <span
-                style={{
-                  padding: "0.25rem 0.5rem",
-                  backgroundColor: "#fff3cd",
-                  color: "#856404",
-                  borderRadius: "12px",
-                  fontSize: "0.875rem",
-                }}
-              >
-                Status: {filters.status}
-              </span>
-            )}
-            {filters.attached && (
-              <span
-                style={{
-                  padding: "0.25rem 0.5rem",
-                  backgroundColor: "#d4edda",
-                  color: "#155724",
-                  borderRadius: "12px",
-                  fontSize: "0.875rem",
-                }}
-              >
-                Product: {filters.attached === "yes" ? "Has product" : "No product"}
-              </span>
-            )}
-            {filters.tag && (
-              <span
-                style={{
-                  padding: "0.25rem 0.5rem",
-                  backgroundColor: "#f8d7da",
-                  color: "#721c24",
-                  borderRadius: "12px",
-                  fontSize: "0.875rem",
-                }}
-              >
-                Tag: {filters.tag}
-              </span>
-            )}
-          </div>
-        )}
-
-        {/* Results Count */}
-        <div style={{ marginTop: "1rem", color: "#666", fontSize: "0.875rem" }}>
+        
+        <div style={{ fontSize: "0.85rem", color: "#666", marginTop: "0.5rem" }}>
           Showing {mediaList.length} media items
           {hasActiveFilters && " (filtered)"}
         </div>
       </s-section>
 
-      <s-section heading="Add New Media">
-        {actionData?.limitReached && (
+      {/* Upload Media */}
+      <s-section heading="Upload Media">
+        {!usageCheck?.allowed ? (
           <div
             style={{
-              padding: "1rem",
+              padding: "2rem",
               background: "#fff3cd",
-              border: "1px solid #f49342",
-              borderRadius: "6px",
-              marginBottom: "1rem",
+              border: "2px solid #f49342",
+              borderRadius: "8px",
+              textAlign: "center",
             }}
           >
-            <div style={{ display: "flex", alignItems: "start", gap: "0.5rem" }}>
-              <span style={{ fontSize: "1.2rem" }}>⚠️</span>
-              <div>
-                <strong style={{ color: "#856404" }}>Usage Limit Reached</strong>
-                <p style={{ margin: "0.25rem 0 0", fontSize: "0.9rem", color: "#856404" }}>
-                  {actionData.error}
-                </p>
-                <a
-                  href="/app/billing"
-                  style={{
-                    display: "inline-block",
-                    marginTop: "0.5rem",
-                    padding: "0.5rem 1rem",
-                    background: "#0066cc",
-                    color: "white",
-                    borderRadius: "4px",
-                    textDecoration: "none",
-                    fontSize: "0.875rem",
-                    fontWeight: "500",
-                  }}
-                >
-                  View Plans & Upgrade →
-                </a>
-              </div>
-            </div>
+            <div style={{ fontSize: "2.5rem", marginBottom: "1rem" }}>⚠️</div>
+            <h3 style={{ margin: "0 0 0.5rem 0", color: "#856404" }}>Media Limit Reached</h3>
+            <p style={{ margin: "0 0 1rem 0", color: "#666" }}>
+              Your plan allows {usageCheck.limit} media items. You currently have {usageCheck.current}.
+            </p>
+            <a
+              href="/app/billing"
+              style={{
+                display: "inline-block",
+                padding: "0.75rem 2rem",
+                background: "#0066cc",
+                color: "white",
+                borderRadius: "6px",
+                textDecoration: "none",
+                fontWeight: "600",
+              }}
+            >
+              Upgrade Plan to Add More Media →
+            </a>
           </div>
+        ) : (
+          <FileUploader
+            onUploadComplete={() => {
+              window.location.reload();
+            }}
+            maxFiles={10}
+          />
         )}
-
-        <Form method="post">
-          <div style={{ marginBottom: "1rem" }}>
-            <label
-              htmlFor="media-url"
-              style={{ display: "block", marginBottom: "0.5rem" }}
-            >
-              <strong>URL *</strong>
-            </label>
-            <input
-              id="media-url"
-              type="text"
-              name="url"
-              placeholder="https://example.com/image.jpg"
-              disabled={!usageCheck?.allowed}
-              style={{
-                width: "100%",
-                padding: "0.5rem",
-                border: actionData?.error
-                  ? "1px solid #d32f2f"
-                  : "1px solid #ccc",
-                borderRadius: "4px",
-                opacity: !usageCheck?.allowed ? 0.6 : 1,
-                cursor: !usageCheck?.allowed ? "not-allowed" : "text",
-              }}
-            />
-            {actionData?.error && !actionData?.limitReached && (
-              <div style={{ color: "#d32f2f", marginTop: "0.5rem" }}>
-                {actionData.error}
-              </div>
-            )}
-          </div>
-
-          <div style={{ marginBottom: "1rem" }}>
-            <label
-              htmlFor="media-caption"
-              style={{ display: "block", marginBottom: "0.5rem" }}
-            >
-              <strong>Caption</strong>
-            </label>
-            <input
-              id="media-caption"
-              type="text"
-              name="caption"
-              placeholder="Optional caption"
-              style={{
-                width: "100%",
-                padding: "0.5rem",
-                border: "1px solid #ccc",
-                borderRadius: "4px",
-              }}
-            />
-          </div>
-
-          <div style={{ marginBottom: "1rem" }}>
-            <label
-              htmlFor="media-status"
-              style={{ display: "block", marginBottom: "0.5rem" }}
-            >
-              <strong>Status</strong>
-            </label>
-            <select
-              id="media-status"
-              name="status"
-              defaultValue="DRAFT"
-              style={{
-                width: "100%",
-                padding: "0.5rem",
-                border: "1px solid #ccc",
-                borderRadius: "4px",
-              }}
-            >
-              <option value="DRAFT">DRAFT</option>
-              <option value="APPROVED">APPROVED</option>
-              <option value="REJECTED">REJECTED</option>
-            </select>
-          </div>
-
-          <button
-            type="submit"
-            disabled={!usageCheck?.allowed}
-            style={{
-              padding: "0.5rem 1rem",
-              backgroundColor: !usageCheck?.allowed ? "#ccc" : "#008060",
-              color: "white",
-              border: "none",
-              borderRadius: "4px",
-              cursor: !usageCheck?.allowed ? "not-allowed" : "pointer",
-              fontWeight: "500",
-              opacity: !usageCheck?.allowed ? 0.6 : 1,
-            }}
-          >
-            {!usageCheck?.allowed ? "Limit Reached" : "Save"}
-          </button>
-          {!usageCheck?.allowed && (
-            <span style={{ marginLeft: "1rem", fontSize: "0.875rem", color: "#856404" }}>
-              Upgrade your plan to add more media
-            </span>
-          )}
-        </Form>
       </s-section>
 
+      {/* Media Library */}
       <s-section heading="Media Library">
         {/* Bulk Actions */}
         {someSelected && (
           <div
             style={{
+              position: "sticky",
+              top: 0,
+              zIndex: 100,
               padding: "1rem",
-              backgroundColor: "#f5f5f5",
-              borderRadius: "4px",
+              background: "#16acf1",
+              color: "white",
+              borderRadius: "8px",
               marginBottom: "1rem",
-              display: "flex",
-              gap: "0.5rem",
-              alignItems: "center",
+              boxShadow: "0 4px 12px rgba(22, 172, 241, 0.3)",
             }}
           >
-            <span style={{ fontWeight: "500", marginRight: "1rem" }}>
-              {selectedItems.length} selected
-            </span>
-            <button
-              onClick={() => handleBulkStatus("APPROVED")}
-              disabled={isBulkUpdating}
-              style={{
-                padding: "0.5rem 1rem",
-                backgroundColor: isBulkUpdating ? "#ccc" : "#28a745",
-                color: "white",
-                border: "none",
-                borderRadius: "4px",
-                cursor: isBulkUpdating ? "not-allowed" : "pointer",
-                fontWeight: "500",
-              }}
-            >
-              {isBulkUpdating ? "Updating..." : "Approve Selected"}
-            </button>
-            <button
-              onClick={() => handleBulkStatus("REJECTED")}
-              disabled={isBulkUpdating}
-              style={{
-                padding: "0.5rem 1rem",
-                backgroundColor: isBulkUpdating ? "#ccc" : "#dc3545",
-                color: "white",
-                border: "none",
-                borderRadius: "4px",
-                cursor: isBulkUpdating ? "not-allowed" : "pointer",
-                fontWeight: "500",
-              }}
-            >
-              {isBulkUpdating ? "Updating..." : "Reject Selected"}
-            </button>
-            <button
-              onClick={() => handleBulkStatus("DRAFT")}
-              disabled={isBulkUpdating}
-              style={{
-                padding: "0.5rem 1rem",
-                backgroundColor: isBulkUpdating ? "#ccc" : "#666",
-                color: "white",
-                border: "none",
-                borderRadius: "4px",
-                cursor: isBulkUpdating ? "not-allowed" : "pointer",
-                fontWeight: "500",
-              }}
-            >
-              {isBulkUpdating ? "Updating..." : "Set to Draft"}
-            </button>
-            <button
-              onClick={() => setSelectedItems([])}
-              style={{
-                padding: "0.5rem 1rem",
-                backgroundColor: "white",
-                color: "#333",
-                border: "1px solid #ccc",
-                borderRadius: "4px",
-                cursor: "pointer",
-                marginLeft: "auto",
-              }}
-            >
-              Clear Selection
-            </button>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "1rem" }}>
+              <div style={{ fontWeight: "600" }}>
+                {selectedItems.length} item{selectedItems.length !== 1 ? "s" : ""} selected
+              </div>
+              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                <button
+                  onClick={() => handleBulkUpdate("APPROVED")}
+                  disabled={isBulkUpdating}
+                  style={{
+                    padding: "0.5rem 1rem",
+                    background: "#008060",
+                    color: "white",
+                    border: "none",
+                    borderRadius: "4px",
+                    cursor: isBulkUpdating ? "not-allowed" : "pointer",
+                    fontWeight: "500",
+                    fontSize: "0.85rem",
+                  }}
+                >
+                  ✓ Approve Selected
+                </button>
+                <button
+                  onClick={() => handleBulkUpdate("REJECTED")}
+                  disabled={isBulkUpdating}
+                  style={{
+                    padding: "0.5rem 1rem",
+                    background: "#dc3545",
+                    color: "white",
+                    border: "none",
+                    borderRadius: "4px",
+                    cursor: isBulkUpdating ? "not-allowed" : "pointer",
+                    fontWeight: "500",
+                    fontSize: "0.85rem",
+                  }}
+                >
+                  ✕ Reject Selected
+                </button>
+                <button
+                  onClick={() => handleBulkUpdate("DRAFT")}
+                  disabled={isBulkUpdating}
+                  style={{
+                    padding: "0.5rem 1rem",
+                    background: "white",
+                    color: "#16acf1",
+                    border: "1px solid white",
+                    borderRadius: "4px",
+                    cursor: isBulkUpdating ? "not-allowed" : "pointer",
+                    fontWeight: "500",
+                    fontSize: "0.85rem",
+                  }}
+                >
+                  Set to Draft
+                </button>
+                <button
+                  onClick={() => setSelectedItems([])}
+                  style={{
+                    padding: "0.5rem 1rem",
+                    background: "rgba(255,255,255,0.2)",
+                    color: "white",
+                    border: "1px solid rgba(255,255,255,0.5)",
+                    borderRadius: "4px",
+                    cursor: "pointer",
+                    fontSize: "0.85rem",
+                  }}
+                >
+                  Clear Selection
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
         {mediaList.length === 0 ? (
-          <s-paragraph>
-            No media found. Start by uploading your first UGC content.
-          </s-paragraph>
+          <div style={{ padding: "4rem 2rem", textAlign: "center", background: "#f9f9f9", borderRadius: "8px" }}>
+            <div style={{ fontSize: "3rem", marginBottom: "1rem" }}>📸</div>
+            <h3 style={{ margin: "0 0 0.5rem 0", fontSize: "1.2rem", color: "#333" }}>No media found</h3>
+            <p style={{ margin: 0, color: "#666" }}>
+              {hasActiveFilters ? "Try adjusting your filters" : "Start by uploading your first UGC content above"}
+            </p>
+          </div>
         ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table
+          <>
+            {/* Select All Option */}
+            <div style={{ marginBottom: "1rem", padding: "0.75rem", background: "#f9f9f9", borderRadius: "6px", border: "1px solid #e0e0e0" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={allSelected}
+                  onChange={handleSelectAll}
+                  style={{ width: "18px", height: "18px", cursor: "pointer" }}
+                />
+                <span style={{ fontWeight: "500", fontSize: "0.9rem" }}>
+                  Select all {mediaList.length} items
+                </span>
+              </label>
+            </div>
+
+            {/* Card Grid */}
+            <div
               style={{
-                width: "100%",
-                borderCollapse: "collapse",
-                marginTop: "1rem",
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+                gap: "1.5rem",
               }}
             >
-              <thead>
-                <tr style={{ borderBottom: "2px solid #ddd" }}>
-                  <th style={{ padding: "0.75rem", width: "40px" }}>
-                    <input
-                      type="checkbox"
-                      checked={allSelected}
-                      onChange={handleSelectAll}
-                      style={{ cursor: "pointer" }}
-                    />
-                  </th>
-                  <th
-                    style={{
-                      padding: "0.75rem",
-                      textAlign: "left",
-                      width: "80px",
-                    }}
-                  >
-                    Thumbnail
-                  </th>
-                  <th style={{ padding: "0.75rem", textAlign: "left" }}>
-                    Caption
-                  </th>
-                  <th style={{ padding: "0.75rem", textAlign: "left" }}>
-                    Status
-                  </th>
-                  <th style={{ padding: "0.75rem", textAlign: "left" }}>
-                    Product
-                  </th>
-                  <th style={{ padding: "0.75rem", textAlign: "left" }}>
-                    Created
-                  </th>
-                  <th style={{ padding: "0.75rem", textAlign: "left" }}>
-                    Tags
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {mediaList.map((media) => (
-                  <MediaRow
-                    key={media.id}
-                    media={media}
-                    getBadgeStyle={getBadgeStyle}
-                    isSelected={selectedItems.includes(media.id)}
-                    onSelect={handleSelectItem}
-                  />
-                ))}
-              </tbody>
-            </table>
-          </div>
+              {mediaList.map((media) => (
+                <MediaCard
+                  key={media.id}
+                  media={media}
+                  isSelected={selectedItems.includes(media.id)}
+                  onSelect={handleSelectItem}
+                />
+              ))}
+            </div>
+          </>
         )}
       </s-section>
     </s-page>
   );
 }
-
