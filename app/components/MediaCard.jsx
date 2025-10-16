@@ -3,7 +3,8 @@
 
 /* eslint-disable react/prop-types */
 export default function MediaCard({ media, isSelected, onSelect, onClick }) {
-  const isVideo = media.url.match(/\.(mp4|webm|mov)$/i);
+  // Detect video by URL extension OR data URL content type
+  const isVideo = media.url.match(/\.(mp4|webm|mov)$/i) || media.url.startsWith("data:video/");
 
   const getBadgeColor = (status) => {
     switch (status) {
@@ -78,7 +79,7 @@ export default function MediaCard({ media, isSelected, onSelect, onClick }) {
           <>
             {/* Video thumbnail - show first frame */}
             <video
-              src={media.url}
+              src={media.url.includes("#t=") ? media.url : `${media.url}#t=0.1`}
               style={{
                 position: "absolute",
                 top: 0,
@@ -90,6 +91,7 @@ export default function MediaCard({ media, isSelected, onSelect, onClick }) {
               muted
               playsInline
               preload="metadata"
+              poster=""
             />
             {/* Video play icon overlay */}
             <div
@@ -194,7 +196,7 @@ export default function MediaCard({ media, isSelected, onSelect, onClick }) {
         )}
 
         {/* Product */}
-        {media.product ? (
+        {media.product && media.product.title ? (
           <div style={{ fontSize: "0.75rem", color: "#666", marginBottom: "8px", display: "flex", alignItems: "center", gap: "4px" }}>
             <span>🏷️</span>
             <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>

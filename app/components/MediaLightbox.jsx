@@ -15,7 +15,8 @@ export default function MediaLightbox({ media, allMedia, onClose, onNavigate }) 
   const hasPrevious = currentIndex > 0;
   const hasNext = currentIndex < allMedia.length - 1;
 
-  const isVideo = media.url.match(/\.(mp4|webm|mov)$/i);
+  // Detect video by URL extension OR data URL content type
+  const isVideo = media.url.match(/\.(mp4|webm|mov)$/i) || media.url.startsWith("data:video/");
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -380,7 +381,7 @@ export default function MediaLightbox({ media, allMedia, onClose, onNavigate }) 
               <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: "600", fontSize: "0.9rem" }}>
                 Product
               </label>
-              {media.product ? (
+              {media.product && media.product.title ? (
                 <div
                   style={{
                     display: "flex",

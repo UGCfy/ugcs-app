@@ -46,11 +46,19 @@ export const loader = async ({ request }) => {
               { url: { not: { endsWith: ".mp4" } } },
               { url: { not: { endsWith: ".webm" } } },
               { url: { not: { endsWith: ".mov" } } },
+              { url: { not: { startsWith: "data:video/" } } },
             ],
           }
         : {},
       mediaType === "videos"
-        ? { OR: [{ url: { endsWith: ".mp4" } }, { url: { endsWith: ".webm" } }, { url: { endsWith: ".mov" } }] }
+        ? { 
+            OR: [
+              { url: { endsWith: ".mp4" } }, 
+              { url: { endsWith: ".webm" } }, 
+              { url: { endsWith: ".mov" } },
+              { url: { startsWith: "data:video/" } },
+            ],
+          }
         : {},
     ],
   };
