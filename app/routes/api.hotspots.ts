@@ -1,12 +1,13 @@
-import { json } from "@remix-run/node";
-import prisma from "../lib/prisma.server";
+// app/routes/api.hotspots.ts
+import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
+import { prisma } from "../lib/prisma.server";
 
-export async function loader({ request }) {
+export async function loader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
   const mediaId = url.searchParams.get("mediaId");
 
   if (!mediaId) {
-    return json({ error: "mediaId required" }, { status: 400 });
+    return { error: "mediaId required" };
   }
 
   try {
@@ -15,28 +16,28 @@ export async function loader({ request }) {
       orderBy: { timestamp: "asc" },
     });
 
-    return json({ hotspots });
+    return { hotspots };
   } catch (error) {
     console.error("Error fetching hotspots:", error);
-    return json({ error: "Failed to fetch hotspots" }, { status: 500 });
+    return { error: "Failed to fetch hotspots" };
   }
 }
 
-export async function action({ request }) {
+export async function action({ request }: ActionFunctionArgs) {
   const formData = await request.formData();
-  const intent = formData.get("intent");
+  const intent = formData.get("intent") as string;
 
   try {
     // CREATE hotspot
     if (intent === "create") {
-      const mediaId = formData.get("mediaId");
-      const productId = formData.get("productId");
-      const timestamp = parseFloat(formData.get("timestamp"));
-      const duration = parseFloat(formData.get("duration") || "5.0");
-      const position = formData.get("position") || "bottom-right";
+      const mediaId = formData.get("mediaId") as string;
+      const productId = formData.get("productId") as string;
+      const timestamp = parseFloat(formData.get("timestamp") as string);
+      const duration = parseFloat((formData.get("duration") as string) || "5.0");
+      const position = (formData.get("position") as string) || "bottom-right";
 
       if (!mediaId || !productId || isNaN(timestamp)) {
-        return json({ error: "Missing required fields" }, { status: 400 });
+        return { error: "Missing required fields" };
       }
 
       const hotspot = await prisma.productHotspot.create({
@@ -49,17 +50,17 @@ export async function action({ request }) {
         },
       });
 
-      return json({ hotspot });
+      return { hotspot };
     }
 
     // UPDATE hotspot
     if (intent === "update") {
-      const id = formData.get("id");
-      const timestamp = formData.get("timestamp");
-      const duration = formData.get("duration");
-      const position = formData.get("position");
+      const id = formData.get("id") as string;
+      const timestamp = formData.get("timestamp") as string;
+      const duration = formData.get("duration") as string;
+      const position = formData.get("position") as string;
 
-      const updateData = {};
+      const updateData: any = {};
       if (timestamp) updateData.timestamp = parseFloat(timestamp);
       if (duration) updateData.duration = parseFloat(duration);
       if (position) updateData.position = position;
@@ -69,24 +70,24 @@ export async function action({ request }) {
         data: updateData,
       });
 
-      return json({ hotspot });
+      return { hotspot };
     }
 
     // DELETE hotspot
     if (intent === "delete") {
-      const id = formData.get("id");
+      const id = formData.get("id") as string;
 
       await prisma.productHotspot.delete({
         where: { id },
       });
 
-      return json({ success: true });
+      return { success: true };
     }
 
-    return json({ error: "Invalid intent" }, { status: 400 });
+    return { error: "Invalid intent" };
   } catch (error) {
     console.error("Error managing hotspots:", error);
-    return json({ error: "Failed to manage hotspots" }, { status: 500 });
+    return { error: "Failed to manage hotspots" };
   }
 }
 
