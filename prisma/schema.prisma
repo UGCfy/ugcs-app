@@ -27,18 +27,19 @@ model Session {
 }
 
 model Media {
-  id         String       @id @default(cuid())
-  url        String
-  caption    String?
-  productId  String?
-  sourceType SourceType   @default(UPLOAD)
-  status     UGCStatus    @default(DRAFT)
-  tags       String[]     // Legacy: keep for backward compatibility
-  mediaTags  MediaTag[]   // New: normalized many-to-many relation
-  views      MediaView[]  // Analytics: view tracking
-  clicks     MediaClick[] // Analytics: click tracking
-  createdAt  DateTime     @default(now())
-  updatedAt  DateTime     @updatedAt
+  id            String           @id @default(cuid())
+  url           String
+  caption       String?
+  productId     String?
+  sourceType    SourceType       @default(UPLOAD)
+  status        UGCStatus        @default(DRAFT)
+  tags          String[]         // Legacy: keep for backward compatibility
+  mediaTags     MediaTag[]       // New: normalized many-to-many relation
+  views         MediaView[]      // Analytics: view tracking
+  clicks        MediaClick[]     // Analytics: click tracking
+  hotspots      ProductHotspot[] // Shoppable video: timed product tags
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
 }
 
 enum SourceType {
@@ -159,4 +160,20 @@ model TeamMember {
 
   @@index([email])
   @@index([isActive])
+}
+
+// Shoppable Video - Product Hotspots
+model ProductHotspot {
+  id         String   @id @default(cuid())
+  mediaId    String
+  media      Media    @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  productId  String   // Shopify product GID
+  timestamp  Float    // Time in seconds when hotspot appears
+  duration   Float    @default(5.0) // How long hotspot shows (seconds)
+  position   String   @default("bottom-right") // "top-left", "top-right", "bottom-left", "bottom-right", "center"
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([mediaId])
+  @@index([timestamp])
 }

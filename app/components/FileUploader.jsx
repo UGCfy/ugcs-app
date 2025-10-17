@@ -1,8 +1,23 @@
 // app/components/FileUploader.jsx
-// Drag & drop file upload component
+// Drag & drop file upload component with video support
 import { useState } from "react";
+import { 
+  generateVideoThumbnail, 
+  validateVideo,
+  formatDuration 
+} from "../utils/video-optimizer";
 
 /* eslint-disable react/prop-types */
+
+// Helper function
+function formatFileSize(bytes) {
+  if (bytes === 0) return '0 Bytes';
+  const k = 1024;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
 export default function FileUploader({ onUploadComplete, maxFiles = 10 }) {
   const [isDragging, setIsDragging] = useState(false);
   const [previews, setPreviews] = useState([]);
@@ -43,7 +58,7 @@ export default function FileUploader({ onUploadComplete, maxFiles = 10 }) {
     handleFiles(files);
   };
 
-  const handleFiles = (files) => {
+  const handleFiles = async (files) => {
     // Filter for images and videos only
     const validFiles = files.filter((file) => {
       return file.type.startsWith("image/") || file.type.startsWith("video/");
@@ -59,17 +74,42 @@ export default function FileUploader({ onUploadComplete, maxFiles = 10 }) {
       return;
     }
 
-    // Create previews
-    const newPreviews = validFiles.map((file) => {
-      const url = URL.createObjectURL(file);
-      return {
-        file,
-        url,
-        name: file.name,
-        type: file.type,
-        size: file.size,
-      };
-    });
+    // Create previews with video validation
+    const newPreviews = await Promise.all(
+      validFiles.map(async (file) => {
+        const url = URL.createObjectURL(file);
+        const preview = {
+          file,
+          url,
+          name: file.name,
+          type: file.type,
+          size: file.size,
+        };
+
+        // For videos, add metadata and thumbnail
+        if (file.type.startsWith("video/")) {
+          try {
+            const validation = await validateVideo(file, {
+              maxSize: 100 * 1024 * 1024, // 100MB
+              maxDuration: 180, // 3 minutes
+            });
+            
+            preview.validation = validation;
+            
+            if (validation.valid || validation.warnings.length > 0) {
+              // Generate thumbnail
+              preview.thumbnail = await generateVideoThumbnail(url, 1);
+              preview.metadata = validation.metadata;
+            }
+          } catch (error) {
+            console.error("Video processing error:", error);
+            preview.error = "Failed to process video";
+          }
+        }
+
+        return preview;
+      })
+    );
 
     setPreviews(newPreviews);
   };
@@ -377,6 +417,63 @@ export default function FileUploader({ onUploadComplete, maxFiles = 10 }) {
                       objectFit: "cover",
                     }}
                   />
+                ) : preview.type.startsWith("video/") ? (
+                  <>
+                    {/* Video thumbnail or placeholder */}
+                    {preview.thumbnail ? (
+                      <img
+                        src={preview.thumbnail}
+                        alt={preview.name}
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                          width: "100%",
+                          height: "100%",
+                          objectFit: "cover",
+                        }}
+                      />
+                    ) : (
+                      <div
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                          width: "100%",
+                          height: "100%",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          background: "#000",
+                          color: "white",
+                          fontSize: "3rem",
+                        }}
+                      >
+                        🎬
+                      </div>
+                    )}
+                    {/* Video play indicator */}
+                    <div
+                      style={{
+                        position: "absolute",
+                        top: "50%",
+                        left: "50%",
+                        transform: "translate(-50%, -50%)",
+                        width: "40px",
+                        height: "40px",
+                        borderRadius: "50%",
+                        background: "rgba(0,0,0,0.7)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        color: "white",
+                        fontSize: "20px",
+                        pointerEvents: "none",
+                      }}
+                    >
+                      ▶
+                    </div>
+                  </>
                 ) : (
                   <div
                     style={{
@@ -393,7 +490,7 @@ export default function FileUploader({ onUploadComplete, maxFiles = 10 }) {
                       fontSize: "3rem",
                     }}
                   >
-                    🎬
+                    📄
                   </div>
                 )}
 
@@ -415,7 +512,20 @@ export default function FileUploader({ onUploadComplete, maxFiles = 10 }) {
                   </div>
                   <div style={{ fontSize: "0.65rem", opacity: 0.8 }}>
                     {formatFileSize(preview.size)}
+                    {preview.metadata && ` • ${formatDuration(preview.metadata.duration)}`}
                   </div>
+                  {/* Video validation warnings */}
+                  {preview.validation && preview.validation.warnings?.length > 0 && (
+                    <div style={{ fontSize: "0.6rem", color: "#ffc107", marginTop: "2px" }}>
+                      ⚠️ {preview.validation.warnings[0]}
+                    </div>
+                  )}
+                  {/* Video validation errors */}
+                  {preview.validation && preview.validation.errors?.length > 0 && (
+                    <div style={{ fontSize: "0.6rem", color: "#ff5252", marginTop: "2px" }}>
+                      ❌ {preview.validation.errors[0]}
+                    </div>
+                  )}
                 </div>
 
                 {/* Remove button */}

@@ -2,6 +2,7 @@
 // Professional lightbox for media editing
 import { useState, useEffect } from "react";
 import ProductAttach from "./ProductAttach";
+import HotspotEditor from "./HotspotEditor";
 
 /* eslint-disable react/prop-types */
 export default function MediaLightbox({ media, allMedia, onClose, onNavigate }) {
@@ -531,6 +532,11 @@ export default function MediaLightbox({ media, allMedia, onClose, onNavigate }) 
                 <strong>Created:</strong> {new Date(media.createdAt).toLocaleString()}
               </div>
             </div>
+
+            {/* Shoppable Hotspots (Videos Only) */}
+            {isVideo && (
+              <HotspotEditor mediaId={media.id} videoUrl={media.url} />
+            )}
 
             {/* Analytics Preview (if available) */}
             {media._count && (media._count.views > 0 || media._count.clicks > 0) && (
