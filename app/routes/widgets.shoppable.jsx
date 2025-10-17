@@ -1,5 +1,4 @@
-import { json } from "@remix-run/node";
-import prisma from "../lib/prisma.server";
+import { prisma } from "../lib/prisma.server";
 
 /**
  * Shoppable Video Widget
@@ -7,13 +6,18 @@ import prisma from "../lib/prisma.server";
  * URL: /apps/ugc/widgets/shoppable?mediaId=xxx&shop=xxx
  */
 
+export const headers = () => ({
+  "Cache-Control": "public, max-age=300", // 5 min cache
+  "X-Content-Type-Options": "nosniff",
+});
+
 export async function loader({ request }) {
   const url = new URL(request.url);
   const mediaId = url.searchParams.get("mediaId");
   const shop = url.searchParams.get("shop");
 
   if (!mediaId) {
-    return json({ error: "mediaId required" }, { status: 400 });
+    return { error: "mediaId required" };
   }
 
   try {
@@ -28,12 +32,12 @@ export async function loader({ request }) {
     });
 
     if (!media) {
-      return json({ error: "Media not found" }, { status: 404 });
+      return { error: "Media not found" };
     }
 
     // Only show approved media
     if (media.status !== "APPROVED") {
-      return json({ error: "Media not available" }, { status: 403 });
+      return { error: "Media not available" };
     }
 
     // Get product details from Shopify for each hotspot
@@ -51,14 +55,10 @@ export async function loader({ request }) {
       },
     });
 
-    return json({ media, products }, {
-      headers: {
-        "Cache-Control": "public, max-age=300", // 5 min cache
-      },
-    });
+    return { media, products };
   } catch (error) {
     console.error("Error loading shoppable video:", error);
-    return json({ error: "Failed to load video" }, { status: 500 });
+    return { error: "Failed to load video" };
   }
 }
 
